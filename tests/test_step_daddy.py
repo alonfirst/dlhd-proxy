@@ -475,7 +475,45 @@ def test_stream_rejects_invalid_auth_host(monkeypatch):
     })
     monkeypatch.setattr(step_daddy, "_get", fake_get.__get__(step_daddy, StepDaddy))
 
-    with pytest.raises(ValueError, match="auth host .*scheme or hostname"):
+    with pytest.raises(ValueError, match="auth host.*missing scheme or hostname"):
+        asyncio.run(step_daddy.stream("42"))
+
+
+def test_stream_rejects_missing_auth_host(monkeypatch):
+    iframe_html = '<iframe src="https://example.com/embed" width="100%" height="100%"></iframe>'
+
+    class FakeResponse:
+        def __init__(self, text: str = "", status_code: int = 200, json_data=None):
+            self.text = text
+            self.status_code = status_code
+            self._json_data = json_data
+
+        def json(self):
+            return self._json_data
+
+    responses = iter(
+        [
+            FakeResponse(text=iframe_html),
+            FakeResponse(text='const CHANNEL_KEY = "abc123";'),
+        ]
+    )
+
+    async def fake_get(_self, url: str, **_kwargs):
+        try:
+            return next(responses)
+        except StopIteration:  # pragma: no cover - unexpected extra request
+            raise AssertionError(f"Unexpected request to {url}")
+
+    step_daddy = StepDaddy()
+    monkeypatch.setattr("dlhd_proxy.step_daddy.decode_bundle", lambda _text: {
+        "b_ts": "123",
+        "b_sig": "abc",
+        "b_rnd": "rnd",
+        "b_host": "   ",
+    })
+    monkeypatch.setattr(step_daddy, "_get", fake_get.__get__(step_daddy, StepDaddy))
+
+    with pytest.raises(ValueError, match="auth host.*missing scheme or hostname"):
         asyncio.run(step_daddy.stream("42"))
 
 

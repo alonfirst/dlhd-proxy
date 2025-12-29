@@ -153,7 +153,9 @@ class StepDaddy:
         auth_sig = data.get("b_sig", "")
         auth_rnd = data.get("b_rnd", "")
         raw_auth_url = data.get("b_host", "")
-        logger.info("Raw auth url:", raw_auth_url) 
+        logger.info("Raw auth url: %s", raw_auth_url)
+        if not raw_auth_url or not raw_auth_url.strip():
+            raise ValueError(f"Invalid auth host {raw_auth_url!r}: missing scheme or hostname")
         auth_url = re.sub(r"\s+", "", raw_auth_url.strip())
         parsed_auth_url = urlparse(auth_url)
         if not parsed_auth_url.scheme or not parsed_auth_url.netloc:

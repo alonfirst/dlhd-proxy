@@ -163,11 +163,9 @@ class StepDaddy:
         if ":" in parsed_auth_url.netloc:
             host, _, port_str = parsed_auth_url.netloc.rpartition(":")
             if not port_str.isdigit():
-                logger.warning(
-                    "Auth host %r contained a non-numeric port; stripping port and retrying",
-                    raw_auth_url,
+                raise ValueError(
+                    f"Invalid auth host {raw_auth_url!r}: non-numeric port provided"
                 )
-                parsed_auth_url = parsed_auth_url._replace(netloc=host)
 
         try:
             parsed_auth_url.port

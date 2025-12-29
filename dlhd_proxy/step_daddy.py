@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Iterable, List
 from urllib.parse import parse_qs, quote, urljoin, urlparse, urlsplit
 
-import reflex as rx
 from curl_cffi import AsyncSession
+from dataclasses import dataclass
 
 try:
     from bs4 import BeautifulSoup
@@ -55,7 +55,8 @@ def _is_hls_path(path: str) -> bool:
     return suffix in PROXYABLE_HLS_EXTENSIONS
 
 
-class Channel(rx.Base):
+@dataclass
+class Channel:
     id: str
     name: str
     tags: List[str]

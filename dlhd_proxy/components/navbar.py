@@ -1,63 +1,92 @@
+from dataclasses import dataclass
+from typing import Iterable
+
 import reflex as rx
 from rxconfig import config
 
 
-def navbar_icons_item(
-    text: str,
-    icon: str,
-    url: str,
-    external: bool = False,
-    new_tab: bool = False,
-) -> rx.Component:
-    return rx.link(
-        rx.hstack(
-            rx.icon(icon, color="white"),
-            rx.text(text, size="4", weight="medium", color="white"),
-        ),
-        href=url,
-        is_external=external,
-        target="_blank" if new_tab else "_self" if external else None,
+@dataclass(frozen=True, slots=True)
+class NavLink:
+    text: str
+    icon: str
+    url: str
+    external: bool = False
+    new_tab: bool = False
+
+
+NAV_LINKS: tuple[NavLink, ...] = (
+    NavLink("Schedule", "calendar-sync", "/schedule"),
+    NavLink("Channels", "list-checks", "/channels"),
+    NavLink("Refresh", "refresh-cw", "/refresh"),
+    NavLink("playlist.m3u8", "file-down", "/playlist"),
+    NavLink("guide.xml", "file-text", "/guide.xml", True),
+    NavLink("Logs", "bug", "/logs", True),
+    NavLink("Github", "github", "https://github.com/eribbey/dlhd-proxy", True, True),
+)
+
+
+def _link_target(link: NavLink) -> str | None:
+    if link.new_tab:
+        return "_blank"
+    if link.external:
+        return "_self"
+    return None
+
+
+def _brand() -> rx.Component:
+    title = config.app_name.replace("_", "-")
+    return rx.vstack(
+        rx.text(title, size="8", weight="bold"),
+        rx.box(background_color="#fa5252", width="100%", padding="2.5px"),
+        align_items="center",
+        gap="0",
+        cursor="pointer",
+        on_click=rx.redirect("/"),
     )
 
 
-def navbar_icons_menu_item(
-    text: str,
-    icon: str,
-    url: str,
-    external: bool = False,
-    new_tab: bool = False,
-) -> rx.Component:
-    return rx.link(
-        rx.hstack(
-            rx.icon(icon, size=24, color="white"),
-            rx.text(text, size="3", weight="medium", color="white"),
-        ),
-        href=url,
-        is_external=external,
-        target="_blank" if new_tab else "_self" if external else None,
-        padding="0.5em",
+def _link_row(links: Iterable[NavLink]) -> rx.Component:
+    return rx.hstack(
+        *[
+            rx.link(
+                rx.hstack(
+                    rx.icon(link.icon, color="white"),
+                    rx.text(link.text, size="4", weight="medium", color="white"),
+                ),
+                href=link.url,
+                is_external=link.external,
+                target=_link_target(link),
+            )
+            for link in links
+        ],
+        spacing="6",
     )
 
 
-def navbar(search=None) -> rx.Component:
+def _menu_items(links: Iterable[NavLink]) -> rx.Component:
+    return rx.menu.content(
+        *[
+            rx.link(
+                rx.hstack(
+                    rx.icon(link.icon, size=24, color="white"),
+                    rx.text(link.text, size="3", weight="medium", color="white"),
+                ),
+                href=link.url,
+                is_external=link.external,
+                target=_link_target(link),
+                padding="0.5em",
+            )
+            for link in links
+        ]
+    )
+
+
+def navbar(search: rx.Component | None = None) -> rx.Component:
     return rx.box(
         rx.card(
             rx.desktop_only(
                 rx.hstack(
-                    rx.vstack(
-                        rx.text(
-                            config.app_name.replace("_","-"), size="8", weight="bold"
-                        ),
-                        rx.box(
-                            background_color="#fa5252",
-                            width="100%",
-                            padding="2.5px",
-                        ),
-                        align_items="center",
-                        gap="0",
-                        cursor="pointer",
-                        on_click=rx.redirect("/")
-                    ),
+                    _brand(),
                     rx.cond(
                         search,
                         search,
@@ -70,22 +99,7 @@ def navbar(search=None) -> rx.Component:
                             padding="5px",
                         ),
                     ),
-                    rx.hstack(
-                        navbar_icons_item("Schedule", "calendar-sync", "/schedule"),
-                        navbar_icons_item("Channels", "list-checks", "/channels"),
-                        navbar_icons_item("Refresh", "refresh-cw", "/refresh"),
-                        navbar_icons_item("playlist.m3u8", "file-down", "/playlist"),
-                        navbar_icons_item("guide.xml", "file-text", "/guide.xml", True),
-                        navbar_icons_item("Logs", "bug", "/logs", True),
-                        navbar_icons_item(
-                            "Github",
-                            "github",
-                            "https://github.com/eribbey/dlhd-proxy",
-                            True,
-                            True,
-                        ),
-                        spacing="6",
-                    ),
+                    _link_row(NAV_LINKS),
                     justify=rx.breakpoints(initial="between"),
                     align_items="center",
                 ),
@@ -93,45 +107,11 @@ def navbar(search=None) -> rx.Component:
             rx.mobile_and_tablet(
                 rx.vstack(
                     rx.hstack(
-                        rx.vstack(
-                            rx.text(
-                                config.app_name.replace("_","-"), size="7", weight="bold"
-                            ),
-                            rx.box(
-                                background_color="#fa5252",
-                                width="100%",
-                                padding="2.5px",
-                            ),
-                            align_items="center",
-                            gap="0",
-                            on_click=rx.redirect("/")
-                        ),
-                        rx.tablet_only(
-                            rx.cond(
-                                search,
-                                search,
-                                rx.fragment(),
-                            ),
-                        ),
+                        _brand(),
+                        rx.tablet_only(rx.cond(search, search, rx.fragment())),
                         rx.menu.root(
-                            rx.menu.trigger(
-                                rx.icon("menu", size=30)
-                            ),
-                            rx.menu.content(
-                                navbar_icons_menu_item("Schedule", "calendar-sync", "/schedule"),
-                                navbar_icons_menu_item("Channels", "list-checks", "/channels"),
-                                navbar_icons_menu_item("Refresh", "refresh-cw", "/refresh"),
-                                navbar_icons_menu_item("playlist.m3u8", "file-down", "/playlist"),
-                                navbar_icons_menu_item("guide.xml", "file-text", "/guide.xml", True),
-                                navbar_icons_menu_item("Logs", "bug", "/logs", True),
-                                navbar_icons_menu_item(
-                                    "Github",
-                                    "github",
-                                    "https://github.com/eribbey/dlhd-proxy",
-                                    True,
-                                    True,
-                                ),
-                            ),
+                            rx.menu.trigger(rx.icon("menu", size=30)),
+                            _menu_items(NAV_LINKS),
                             justify="end",
                         ),
                         justify=rx.breakpoints(initial="between"),
@@ -140,13 +120,7 @@ def navbar(search=None) -> rx.Component:
                     ),
                     rx.cond(
                         search,
-                        rx.mobile_only(
-                            rx.box(
-                                search,
-                                width="100%",
-                            ),
-                            width="100%",
-                        ),
+                        rx.mobile_only(rx.box(search, width="100%"), width="100%"),
                         rx.fragment(),
                     ),
                 ),

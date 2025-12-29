@@ -1,0 +1,14 @@
+.states
+*.db
+assets/external/
+*.py[cod]
+.web
+.venv
+__pycache__/
+/.idea/
+.env
+guide.xml
+channels.json
+logo-cache/
+dlhd_proxy.log
+config/

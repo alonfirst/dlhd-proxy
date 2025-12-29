@@ -429,9 +429,21 @@ class StepDaddy:
     async def _get(self, url: str, **kwargs):
         use_flaresolverr = self._should_use_flaresolverr(url)
         transport = " via Flaresolverr" if use_flaresolverr else ""
+
         try:
             if use_flaresolverr:
-                response = await self._flaresolverr_get(url, **kwargs)
+                try:
+                    response = await self._flaresolverr_get(url, **kwargs)
+                except Exception as exc:
+                    if self._should_log_url(url):
+                        logger.warning(
+                            "Flaresolverr request for %s failed (%s); falling back to direct",
+                            url,
+                            exc,
+                        )
+                    use_flaresolverr = False
+                    transport = ""
+                    response = await self._session.get(url, **kwargs)
             else:
                 response = await self._session.get(url, **kwargs)
         except Exception:

@@ -152,6 +152,38 @@ def test_get_uses_flaresolverr_for_dlhd_domain(monkeypatch, caplog):
     assert any("via Flaresolverr" in record.getMessage() for record in caplog.records)
 
 
+def test_get_falls_back_when_flaresolverr_fails(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(config, "flaresolverr_url", "http://solver:8191/v1", raising=False)
+
+    class FakeResponse:
+        def __init__(self, status_code: int = 200, text: str = ""):
+            self.status_code = status_code
+            self.text = text
+
+        def json(self):  # pragma: no cover - not used in this path
+            return {}
+
+    class FakeSession:
+        def __init__(self):
+            self.cookies = FakeCookieJar()
+
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse(status_code=405)
+
+        async def get(self, url: str, **_kwargs):
+            return FakeResponse(status_code=200, text="direct ok")
+
+    step_daddy = StepDaddy()
+    step_daddy._session = FakeSession()
+    step_daddy._flaresolverr_url = config.flaresolverr_url
+
+    response = asyncio.run(step_daddy._get("https://dlhd.dad/example"))
+
+    assert response.status_code == 200
+    assert any("falling back to direct" in record.getMessage() for record in caplog.records)
+
+
 def test_stream_rejects_invalid_auth_host_port(monkeypatch):
     step_daddy = StepDaddy()
 

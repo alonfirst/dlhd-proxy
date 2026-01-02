@@ -137,13 +137,15 @@ class StepDaddy:
     async def stream(self, channel_id: str):
         key = "CHANNEL_KEY"
         url = f"{self._base_url}/stream/stream-{channel_id}.php"
-        response = await self._get(url, headers=self._headers())
-        matches = re.compile("iframe src=\"(.*)\" width").findall(response.text)
-        if matches:
-            source_url = matches[0]
-            source_response = await self._get(source_url, headers=self._headers(url))
-        else:
+        watch_url = f"{self._base_url}/watch.php?id={channel_id}"
+        response = await self._get(url, headers=self._headers(referer=watch_url, origin=self._base_url))
+        source_url = self._extract_iframe_src(response.text, str(response.url))
+        if not source_url:
+            watch_response = await self._get(watch_url, headers=self._headers())
+            source_url = self._extract_iframe_src(watch_response.text, str(watch_response.url))
+        if not source_url:
             raise ValueError("Failed to find source URL for channel")
+        source_response = await self._get(source_url, headers=self._headers(watch_url, self._base_url))
 
         channel_key = re.compile(rf"const\s+{re.escape(key)}\s*=\s*\"(.*?)\";").findall(source_response.text)[-1]
         logger.info("Resolved channel %s to source %s with key %s", channel_id, source_url, channel_key)
@@ -620,3 +622,13 @@ class StepDaddy:
             if counts[channel.name] > 1:
                 seen[channel.name] = seen.get(channel.name, 0) + 1
                 channel.name = f"{channel.name} ({seen[channel.name]})"
+
+    @staticmethod
+    def _extract_iframe_src(payload: str, base_url: str | None = None) -> str | None:
+        match = re.search(r'<iframe[^>]+src=[\"\\\']([^\"\\\']+)[\"\\\']', payload, re.IGNORECASE)
+        if not match:
+            return None
+        iframe_src = html.unescape(match.group(1)).strip()
+        if base_url:
+            return urljoin(base_url, iframe_src)
+        return iframe_src

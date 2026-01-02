@@ -152,6 +152,38 @@ def test_get_uses_flaresolverr_for_dlhd_domain(monkeypatch, caplog):
     assert any("via Flaresolverr" in record.getMessage() for record in caplog.records)
 
 
+def test_get_falls_back_when_flaresolverr_fails(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(config, "flaresolverr_url", "http://solver:8191/v1", raising=False)
+
+    class FakeResponse:
+        def __init__(self, status_code: int = 200, text: str = ""):
+            self.status_code = status_code
+            self.text = text
+
+        def json(self):  # pragma: no cover - not used in this path
+            return {}
+
+    class FakeSession:
+        def __init__(self):
+            self.cookies = FakeCookieJar()
+
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse(status_code=405)
+
+        async def get(self, url: str, **_kwargs):
+            return FakeResponse(status_code=200, text="direct ok")
+
+    step_daddy = StepDaddy()
+    step_daddy._session = FakeSession()
+    step_daddy._flaresolverr_url = config.flaresolverr_url
+
+    response = asyncio.run(step_daddy._get("https://dlhd.dad/example"))
+
+    assert response.status_code == 200
+    assert any("falling back to direct" in record.getMessage() for record in caplog.records)
+
+
 def test_stream_rejects_invalid_auth_host_port(monkeypatch):
     step_daddy = StepDaddy()
 
@@ -475,7 +507,45 @@ def test_stream_rejects_invalid_auth_host(monkeypatch):
     })
     monkeypatch.setattr(step_daddy, "_get", fake_get.__get__(step_daddy, StepDaddy))
 
-    with pytest.raises(ValueError, match="auth host .*scheme or hostname"):
+    with pytest.raises(ValueError, match="auth host.*missing scheme or hostname"):
+        asyncio.run(step_daddy.stream("42"))
+
+
+def test_stream_rejects_missing_auth_host(monkeypatch):
+    iframe_html = '<iframe src="https://example.com/embed" width="100%" height="100%"></iframe>'
+
+    class FakeResponse:
+        def __init__(self, text: str = "", status_code: int = 200, json_data=None):
+            self.text = text
+            self.status_code = status_code
+            self._json_data = json_data
+
+        def json(self):
+            return self._json_data
+
+    responses = iter(
+        [
+            FakeResponse(text=iframe_html),
+            FakeResponse(text='const CHANNEL_KEY = "abc123";'),
+        ]
+    )
+
+    async def fake_get(_self, url: str, **_kwargs):
+        try:
+            return next(responses)
+        except StopIteration:  # pragma: no cover - unexpected extra request
+            raise AssertionError(f"Unexpected request to {url}")
+
+    step_daddy = StepDaddy()
+    monkeypatch.setattr("dlhd_proxy.step_daddy.decode_bundle", lambda _text: {
+        "b_ts": "123",
+        "b_sig": "abc",
+        "b_rnd": "rnd",
+        "b_host": "   ",
+    })
+    monkeypatch.setattr(step_daddy, "_get", fake_get.__get__(step_daddy, StepDaddy))
+
+    with pytest.raises(ValueError, match="auth host.*missing scheme or hostname"):
         asyncio.run(step_daddy.stream("42"))
 
 

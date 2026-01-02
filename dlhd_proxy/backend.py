@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import re
 import logging
+from contextlib import suppress, asynccontextmanager
 from urllib.parse import urlparse
 
 import httpx
@@ -21,10 +22,13 @@ from .utils import urlsafe_base64_decode
 
 GUIDE_FILE = Path("guide.xml")
 DATA_DIR = Path(os.getenv("CHANNEL_DATA_DIR", "data"))
-CHANNEL_FILE = Path(
+PLAYLIST_CONFIG = Path(
+    os.getenv("PLAYLIST_CONFIG", str(DATA_DIR / "playlist.json"))
+)
+LEGACY_CHANNEL_FILE = Path(
     os.getenv("CHANNEL_FILE", str(DATA_DIR / "selected_channels.json"))
 )
-LEGACY_CHANNEL_FILE = Path("channels.json")
+OLDER_CHANNEL_FILE = Path("channels.json")
 LOG_FILE = Path("dlhd_proxy.log")
 
 logging.basicConfig(
@@ -37,16 +41,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-fastapi_app = FastAPI()
-
-
-@fastapi_app.exception_handler(404)
-async def not_found_handler(request: Request, exc):
-    """Log 404 errors and return a standard response."""
-    logger.warning("404 Not Found: %s", request.url.path)
-    return JSONResponse({"detail": "Not Found"}, status_code=status.HTTP_404_NOT_FOUND)
-
-
 step_daddy = StepDaddy()
 client = httpx.AsyncClient(
     http2=True,
@@ -55,22 +49,41 @@ client = httpx.AsyncClient(
     verify=False,
 )
 
+channel_refresh_task: asyncio.Task | None = None
+guide_refresh_task: asyncio.Task | None = None
 
-@fastapi_app.on_event("startup")
-async def _startup() -> None:
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     """Ensure we have an initial channel list on boot."""
     if not step_daddy.channels:
         try:
             await step_daddy.load_channels()
         except Exception:
             logger.exception("Initial channel load failed")
+    global channel_refresh_task, guide_refresh_task
+    channel_refresh_task = asyncio.create_task(update_channels())
+    guide_refresh_task = asyncio.create_task(auto_update_guide())
+    try:
+        yield
+    finally:
+        for task in (channel_refresh_task, guide_refresh_task):
+            if task:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        await client.aclose()
+        await step_daddy.aclose()
 
 
-@fastapi_app.on_event("shutdown")
-async def _shutdown() -> None:
-    """Close shared HTTP clients cleanly."""
-    await client.aclose()
-    await step_daddy.aclose()
+fastapi_app = FastAPI(lifespan=lifespan)
+
+
+@fastapi_app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    """Log 404 errors and return a standard response."""
+    logger.warning("404 Not Found: %s", request.url.path)
+    return JSONResponse({"detail": "Not Found"}, status_code=status.HTTP_404_NOT_FOUND)
 
 
 def _load_channel_file(path: Path) -> set[str] | None:
@@ -85,28 +98,38 @@ def _load_channel_file(path: Path) -> set[str] | None:
     except OSError as exc:
         logger.warning("Unable to read channel selection file %s: %s", path, exc)
         return None
+    if isinstance(raw, dict):
+        candidates = raw.get("playlist_channels") or raw.get("channels")
+        if isinstance(candidates, list):
+            return {str(ch) for ch in candidates if ch}
+        logger.warning(
+            "Channel selection file %s had an unexpected structure", path
+        )
+        return None
     if isinstance(raw, list):
-        return {str(ch) for ch in raw}
-    logger.warning("Channel selection file %s contained unexpected data: %s", path, type(raw))
+        return {str(ch) for ch in raw if ch}
+    logger.warning(
+        "Channel selection file %s contained unexpected data: %s", path, type(raw)
+    )
     return None
 
 
 def _write_channel_file(path: Path, payload: list[str]) -> None:
     """Persist the channel IDs to *path*."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload))
+    path.write_text(json.dumps({"playlist_channels": payload}, indent=2))
 
 
 def get_selected_channel_ids() -> set[str]:
     """Return the set of enabled channel IDs."""
-    for path in (CHANNEL_FILE, LEGACY_CHANNEL_FILE):
+    for path in (PLAYLIST_CONFIG, LEGACY_CHANNEL_FILE, OLDER_CHANNEL_FILE):
         data = _load_channel_file(path)
         if data is not None:
-            if path is LEGACY_CHANNEL_FILE and not CHANNEL_FILE.exists():
+            if path is not PLAYLIST_CONFIG and not PLAYLIST_CONFIG.exists():
                 try:
-                    _write_channel_file(CHANNEL_FILE, sorted(data))
+                    _write_channel_file(PLAYLIST_CONFIG, sorted(data))
                 except OSError as exc:
-                    logger.warning("Unable to migrate channel selection to %s: %s", CHANNEL_FILE, exc)
+                    logger.warning("Unable to migrate channel selection to %s: %s", PLAYLIST_CONFIG, exc)
             return data
     return {ch.id for ch in step_daddy.channels}
 
@@ -115,15 +138,17 @@ def set_selected_channel_ids(ids: list[str]) -> None:
     """Persist the selected channel IDs and refresh the guide."""
     cleaned = sorted({str(cid) for cid in ids if cid})
     try:
-        _write_channel_file(CHANNEL_FILE, cleaned)
+        _write_channel_file(PLAYLIST_CONFIG, cleaned)
     except OSError as exc:
         logger.exception("Failed to persist channel selection")
         raise RuntimeError("Unable to save channel selection") from exc
-    if LEGACY_CHANNEL_FILE != CHANNEL_FILE:
+    for legacy_path in (LEGACY_CHANNEL_FILE, OLDER_CHANNEL_FILE):
+        if legacy_path == PLAYLIST_CONFIG:
+            continue
         try:
-            _write_channel_file(LEGACY_CHANNEL_FILE, cleaned)
+            _write_channel_file(legacy_path, cleaned)
         except OSError as exc:
-            logger.warning("Unable to update legacy channel selection file: %s", exc)
+            logger.warning("Unable to update legacy channel selection file %s: %s", legacy_path, exc)
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(generate_guide())
@@ -333,6 +358,22 @@ async def get_schedule():
     return filtered
 
 
+@fastapi_app.get("/channels")
+def channels():
+    """Return the available channels and whether they are in the playlist."""
+    selected = get_selected_channel_ids()
+    return [
+        {
+            "id": ch.id,
+            "name": ch.name,
+            "tags": ch.tags,
+            "logo": ch.logo,
+            "enabled": ch.id in selected,
+        }
+        for ch in get_channels()
+    ]
+
+
 @fastapi_app.get("/logo/{logo}")
 async def logo(logo: str):
     try:
@@ -519,4 +560,3 @@ def logs():
         # Ensure an empty log file exists so the endpoint never 404s
         LOG_FILE.touch()
     return FileResponse(LOG_FILE)
-

@@ -3,12 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        PORT: ${PORT}
-        API_URL: ${API_URL}
-        PROXY_CONTENT: ${PROXY_CONTENT}
-        SOCKS5: ${SOCKS5}
-        FLARESOLVERR_URL: ${FLARESOLVERR_URL}
     environment:
       - PORT=${PORT}
       - API_URL=${API_URL}

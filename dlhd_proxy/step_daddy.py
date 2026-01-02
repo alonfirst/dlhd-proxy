@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Iterable, List
 from urllib.parse import parse_qs, quote, urljoin, urlparse, urlsplit
 
-import reflex as rx
 from curl_cffi import AsyncSession
+from dataclasses import dataclass
 
 try:
     from bs4 import BeautifulSoup
@@ -55,7 +55,8 @@ def _is_hls_path(path: str) -> bool:
     return suffix in PROXYABLE_HLS_EXTENSIONS
 
 
-class Channel(rx.Base):
+@dataclass
+class Channel:
     id: str
     name: str
     tags: List[str]
@@ -152,7 +153,9 @@ class StepDaddy:
         auth_sig = data.get("b_sig", "")
         auth_rnd = data.get("b_rnd", "")
         raw_auth_url = data.get("b_host", "")
-        logger.info("Raw auth url:", raw_auth_url) 
+        logger.info("Raw auth url: %s", raw_auth_url)
+        if not raw_auth_url or not raw_auth_url.strip():
+            raise ValueError(f"Invalid auth host {raw_auth_url!r}: missing scheme or hostname")
         auth_url = re.sub(r"\s+", "", raw_auth_url.strip())
         parsed_auth_url = urlparse(auth_url)
         if not parsed_auth_url.scheme or not parsed_auth_url.netloc:
@@ -426,9 +429,21 @@ class StepDaddy:
     async def _get(self, url: str, **kwargs):
         use_flaresolverr = self._should_use_flaresolverr(url)
         transport = " via Flaresolverr" if use_flaresolverr else ""
+
         try:
             if use_flaresolverr:
-                response = await self._flaresolverr_get(url, **kwargs)
+                try:
+                    response = await self._flaresolverr_get(url, **kwargs)
+                except Exception as exc:
+                    if self._should_log_url(url):
+                        logger.warning(
+                            "Flaresolverr request for %s failed (%s); falling back to direct",
+                            url,
+                            exc,
+                        )
+                    use_flaresolverr = False
+                    transport = ""
+                    response = await self._session.get(url, **kwargs)
             else:
                 response = await self._session.get(url, **kwargs)
         except Exception:

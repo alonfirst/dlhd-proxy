@@ -629,6 +629,15 @@ class StepDaddy:
         if not match:
             return None
         iframe_src = html.unescape(match.group(1)).strip()
-        if base_url:
-            return urljoin(base_url, iframe_src)
-        return iframe_src
+        candidate = urljoin(base_url or "", iframe_src)
+        try:
+            parsed = urlparse(candidate)
+        except ValueError:
+            return None
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return None
+        try:
+            parsed.port
+        except ValueError:
+            return None
+        return parsed._replace(fragment="").geturl()

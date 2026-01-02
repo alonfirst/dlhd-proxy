@@ -523,6 +523,52 @@ def test_stream_falls_back_to_watch_page_when_iframe_missing(monkeypatch):
     assert f"{config.api_url}/content/enc(https://cdn.example.com/stream.m3u8)" in playlist
 
 
+def test_stream_ignores_invalid_iframe_url(monkeypatch):
+    class FakeResponse:
+        def __init__(self, text: str = "", status_code: int = 200, json_data=None, url: str = "https://dlhd.dad/stream/stream-42.php"):
+            self.text = text
+            self.status_code = status_code
+            self._json_data = json_data
+            self.url = url
+
+        def json(self):
+            return self._json_data
+
+    responses = iter(
+        [
+            FakeResponse(text='<iframe src="https://example.com:notaport/embed"></iframe>'),
+            FakeResponse(text='<iframe src="/player/embed.html"></iframe>', url="https://dlhd.dad/watch.php?id=42"),
+            FakeResponse(text='const CHANNEL_KEY = "abc123";', url="https://dlhd.dad/player/embed.html"),
+            FakeResponse(text="ok", status_code=200, url="https://auth.example.com/auth.php"),
+            FakeResponse(json_data={"server_key": "edge1/"}),
+            FakeResponse(text="#EXTM3U\nhttps://cdn.example.com/stream.m3u8\n", url="https://edge1.new.newkso.ru/edge1/abc123/mono.m3u8"),
+        ]
+    )
+
+    async def fake_get(_self, url: str, **_kwargs):
+        try:
+            return next(responses)
+        except StopIteration:  # pragma: no cover - unexpected extra request
+            raise AssertionError(f"Unexpected request to {url}")
+
+    step_daddy = StepDaddy()
+    monkeypatch.setattr(
+        "dlhd_proxy.step_daddy.decode_bundle",
+        lambda _text: {
+            "b_ts": "123",
+            "b_sig": "abc",
+            "b_rnd": "rnd",
+            "b_host": "https://auth.example.com/",
+        },
+    )
+    monkeypatch.setattr("dlhd_proxy.step_daddy.encrypt", lambda value: f"enc({value})")
+    monkeypatch.setattr(step_daddy, "_get", fake_get.__get__(step_daddy, StepDaddy))
+
+    playlist = asyncio.run(step_daddy.stream("42"))
+
+    assert f"{config.api_url}/content/enc(https://cdn.example.com/stream.m3u8)" in playlist
+
+
 def test_stream_rejects_invalid_auth_host(monkeypatch):
     iframe_html = '<iframe src="https://example.com/embed" width="100%" height="100%"></iframe>'
 
